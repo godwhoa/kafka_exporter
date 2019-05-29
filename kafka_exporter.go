@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,21 +29,9 @@ const (
 )
 
 var (
-	clusterBrokers                     *prometheus.Desc
-	topicPartitions                    *prometheus.Desc
-	topicCurrentOffset                 *prometheus.Desc
-	topicOldestOffset                  *prometheus.Desc
-	topicPartitionLeader               *prometheus.Desc
-	topicPartitionReplicas             *prometheus.Desc
-	topicPartitionInSyncReplicas       *prometheus.Desc
-	topicPartitionUsesPreferredReplica *prometheus.Desc
-	topicUnderReplicatedPartition      *prometheus.Desc
-	consumergroupCurrentOffset         *prometheus.Desc
-	consumergroupCurrentOffsetSum      *prometheus.Desc
-	consumergroupLag                   *prometheus.Desc
-	consumergroupLagSum                *prometheus.Desc
-	consumergroupLagZookeeper          *prometheus.Desc
-	consumergroupMembers               *prometheus.Desc
+	clusterBrokers       *prometheus.Desc
+	consumergroupLagSum  *prometheus.Desc
+	consumergroupMembers *prometheus.Desc
 )
 
 // Exporter collects Kafka stats from the given server and exports them using
@@ -202,18 +189,6 @@ func NewExporter(opts kafkaOpts, topicFilter string, groupFilter string) (*Expor
 // implements prometheus.Collector.
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- clusterBrokers
-	ch <- topicCurrentOffset
-	ch <- topicOldestOffset
-	ch <- topicPartitions
-	ch <- topicPartitionLeader
-	ch <- topicPartitionReplicas
-	ch <- topicPartitionInSyncReplicas
-	ch <- topicPartitionUsesPreferredReplica
-	ch <- topicUnderReplicatedPartition
-	ch <- consumergroupCurrentOffset
-	ch <- consumergroupCurrentOffsetSum
-	ch <- consumergroupLag
-	ch <- consumergroupLagZookeeper
 	ch <- consumergroupLagSum
 }
 
@@ -253,22 +228,10 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				plog.Errorf("Cannot get partitions of topic %s: %v", topic, err)
 				return
 			}
-			ch <- prometheus.MustNewConstMetric(
-				topicPartitions, prometheus.GaugeValue, float64(len(partitions)), topic,
-			)
 			e.mu.Lock()
 			offset[topic] = make(map[int32]int64, len(partitions))
 			e.mu.Unlock()
 			for _, partition := range partitions {
-				broker, err := e.client.Leader(topic, partition)
-				if err != nil {
-					plog.Errorf("Cannot get leader of topic %s partition %d: %v", topic, partition, err)
-				} else {
-					ch <- prometheus.MustNewConstMetric(
-						topicPartitionLeader, prometheus.GaugeValue, float64(broker.ID()), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
 				currentOffset, err := e.client.GetOffset(topic, partition, sarama.OffsetNewest)
 				if err != nil {
 					plog.Errorf("Cannot get current offset of topic %s partition %d: %v", topic, partition, err)
@@ -276,75 +239,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 					e.mu.Lock()
 					offset[topic][partition] = currentOffset
 					e.mu.Unlock()
-					ch <- prometheus.MustNewConstMetric(
-						topicCurrentOffset, prometheus.GaugeValue, float64(currentOffset), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
-				oldestOffset, err := e.client.GetOffset(topic, partition, sarama.OffsetOldest)
-				if err != nil {
-					plog.Errorf("Cannot get oldest offset of topic %s partition %d: %v", topic, partition, err)
-				} else {
-					ch <- prometheus.MustNewConstMetric(
-						topicOldestOffset, prometheus.GaugeValue, float64(oldestOffset), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
-				replicas, err := e.client.Replicas(topic, partition)
-				if err != nil {
-					plog.Errorf("Cannot get replicas of topic %s partition %d: %v", topic, partition, err)
-				} else {
-					ch <- prometheus.MustNewConstMetric(
-						topicPartitionReplicas, prometheus.GaugeValue, float64(len(replicas)), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
-				inSyncReplicas, err := e.client.InSyncReplicas(topic, partition)
-				if err != nil {
-					plog.Errorf("Cannot get in-sync replicas of topic %s partition %d: %v", topic, partition, err)
-				} else {
-					ch <- prometheus.MustNewConstMetric(
-						topicPartitionInSyncReplicas, prometheus.GaugeValue, float64(len(inSyncReplicas)), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
-				if broker != nil && replicas != nil && len(replicas) > 0 && broker.ID() == replicas[0] {
-					ch <- prometheus.MustNewConstMetric(
-						topicPartitionUsesPreferredReplica, prometheus.GaugeValue, float64(1), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				} else {
-					ch <- prometheus.MustNewConstMetric(
-						topicPartitionUsesPreferredReplica, prometheus.GaugeValue, float64(0), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
-				if replicas != nil && inSyncReplicas != nil && len(inSyncReplicas) < len(replicas) {
-					ch <- prometheus.MustNewConstMetric(
-						topicUnderReplicatedPartition, prometheus.GaugeValue, float64(1), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				} else {
-					ch <- prometheus.MustNewConstMetric(
-						topicUnderReplicatedPartition, prometheus.GaugeValue, float64(0), topic, strconv.FormatInt(int64(partition), 10),
-					)
-				}
-
-				if e.useZooKeeperLag {
-					ConsumerGroups, err := e.zookeeperClient.Consumergroups()
-
-					if err != nil {
-						plog.Errorf("Cannot get consumer group %v", err)
-					}
-
-					for _, group := range ConsumerGroups {
-						offset, _ := group.FetchOffset(topic, partition)
-						if offset > 0 {
-
-							consumerGroupLag := currentOffset - offset
-							ch <- prometheus.MustNewConstMetric(
-								consumergroupLagZookeeper, prometheus.GaugeValue, float64(consumerGroupLag), group.Name, topic, strconv.FormatInt(int64(partition), 10),
-							)
-						}
-					}
 				}
 			}
 		}
@@ -382,9 +276,16 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			plog.Errorf("Cannot get describe groups: %v", err)
 			return
 		}
+		topicToGroups := make(map[string][]string)
 		for _, group := range describeGroups.Groups {
 			offsetFetchRequest := sarama.OffsetFetchRequest{ConsumerGroup: group.GroupId, Version: 1}
 			for topic, partitions := range offset {
+				// maintain mapping
+				if _, ok := topicToGroups[topic]; !ok {
+					topicToGroups[topic] = []string{}
+				}
+				topicToGroups[topic] = append(topicToGroups[topic], group.GroupId)
+
 				for partition := range partitions {
 					offsetFetchRequest.AddPartition(topic, partition)
 				}
@@ -416,9 +317,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 							}
 							currentOffset := offsetFetchResponseBlock.Offset
 							currentOffsetSum += currentOffset
-							ch <- prometheus.MustNewConstMetric(
-								consumergroupCurrentOffset, prometheus.GaugeValue, float64(currentOffset), group.GroupId, topic, strconv.FormatInt(int64(partition), 10),
-							)
 							e.mu.Lock()
 							if offset, ok := offset[topic][partition]; ok {
 								// If the topic is consumed by that consumer group, but no offset associated with the partition
@@ -430,17 +328,14 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 									lag = offset - offsetFetchResponseBlock.Offset
 									lagSum += lag
 								}
-								ch <- prometheus.MustNewConstMetric(
-									consumergroupLag, prometheus.GaugeValue, float64(lag), group.GroupId, topic, strconv.FormatInt(int64(partition), 10),
-								)
+								// ch <- prometheus.MustNewConstMetric(
+								// 	consumergroupLag, prometheus.GaugeValue, float64(lag), group.GroupId, topic, strconv.FormatInt(int64(partition), 10),
+								// )
 							} else {
 								plog.Errorf("No offset of topic %s partition %d, cannot get consumer group lag", topic, partition)
 							}
 							e.mu.Unlock()
 						}
-						ch <- prometheus.MustNewConstMetric(
-							consumergroupCurrentOffsetSum, prometheus.GaugeValue, float64(currentOffsetSum), group.GroupId, topic,
-						)
 						ch <- prometheus.MustNewConstMetric(
 							consumergroupLagSum, prometheus.GaugeValue, float64(lagSum), group.GroupId, topic,
 						)
@@ -516,75 +411,6 @@ func main() {
 		prometheus.BuildFQName(namespace, "", "brokers"),
 		"Number of Brokers in the Kafka Cluster.",
 		nil, labels,
-	)
-	topicPartitions = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partitions"),
-		"Number of partitions for this Topic",
-		[]string{"topic"}, labels,
-	)
-	topicCurrentOffset = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_current_offset"),
-		"Current Offset of a Broker at Topic/Partition",
-		[]string{"topic", "partition"}, labels,
-	)
-	topicOldestOffset = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_oldest_offset"),
-		"Oldest Offset of a Broker at Topic/Partition",
-		[]string{"topic", "partition"}, labels,
-	)
-
-	topicPartitionLeader = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_leader"),
-		"Leader Broker ID of this Topic/Partition",
-		[]string{"topic", "partition"}, labels,
-	)
-
-	topicPartitionReplicas = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_replicas"),
-		"Number of Replicas for this Topic/Partition",
-		[]string{"topic", "partition"}, labels,
-	)
-
-	topicPartitionInSyncReplicas = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_in_sync_replica"),
-		"Number of In-Sync Replicas for this Topic/Partition",
-		[]string{"topic", "partition"}, labels,
-	)
-
-	topicPartitionUsesPreferredReplica = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_leader_is_preferred"),
-		"1 if Topic/Partition is using the Preferred Broker",
-		[]string{"topic", "partition"}, labels,
-	)
-
-	topicUnderReplicatedPartition = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "topic", "partition_under_replicated_partition"),
-		"1 if Topic/Partition is under Replicated",
-		[]string{"topic", "partition"}, labels,
-	)
-
-	consumergroupCurrentOffset = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "consumergroup", "current_offset"),
-		"Current Offset of a ConsumerGroup at Topic/Partition",
-		[]string{"consumergroup", "topic", "partition"}, labels,
-	)
-
-	consumergroupCurrentOffsetSum = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "consumergroup", "current_offset_sum"),
-		"Current Offset of a ConsumerGroup at Topic for all partitions",
-		[]string{"consumergroup", "topic"}, labels,
-	)
-
-	consumergroupLag = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "consumergroup", "lag"),
-		"Current Approximate Lag of a ConsumerGroup at Topic/Partition",
-		[]string{"consumergroup", "topic", "partition"}, labels,
-	)
-
-	consumergroupLagZookeeper = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "consumergroupzookeeper", "lag_zookeeper"),
-		"Current Approximate Lag(zookeeper) of a ConsumerGroup at Topic/Partition",
-		[]string{"consumergroup", "topic", "partition"}, nil,
 	)
 
 	consumergroupLagSum = prometheus.NewDesc(
