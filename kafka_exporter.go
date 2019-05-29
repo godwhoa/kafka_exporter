@@ -277,16 +277,10 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			plog.Errorf("Cannot get describe groups: %v", err)
 			return
 		}
-		topicToGroups := make(map[string][]string)
+
 		for _, group := range describeGroups.Groups {
 			offsetFetchRequest := sarama.OffsetFetchRequest{ConsumerGroup: group.GroupId, Version: 1}
 			for topic, partitions := range offset {
-				// maintain mapping
-				if _, ok := topicToGroups[topic]; !ok {
-					topicToGroups[topic] = []string{}
-				}
-				topicToGroups[topic] = append(topicToGroups[topic], group.GroupId)
-
 				for partition := range partitions {
 					offsetFetchRequest.AddPartition(topic, partition)
 				}
