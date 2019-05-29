@@ -190,6 +190,7 @@ func NewExporter(opts kafkaOpts, topicFilter string, groupFilter string) (*Expor
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- clusterBrokers
 	ch <- consumergroupLagSum
+	ch <- consumergroupMembers
 }
 
 // Collect fetches the stats from configured Kafka location and delivers them
@@ -328,9 +329,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 									lag = offset - offsetFetchResponseBlock.Offset
 									lagSum += lag
 								}
-								// ch <- prometheus.MustNewConstMetric(
-								// 	consumergroupLag, prometheus.GaugeValue, float64(lag), group.GroupId, topic, strconv.FormatInt(int64(partition), 10),
-								// )
 							} else {
 								plog.Errorf("No offset of topic %s partition %d, cannot get consumer group lag", topic, partition)
 							}
