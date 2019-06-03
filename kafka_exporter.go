@@ -422,6 +422,12 @@ func main() {
 		[]string{"consumergroup"}, labels,
 	)
 
+	consumergroupCurrentOffsetSum = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "consumergroup", "current_offset_sum"),
+		"Current Offset of a ConsumerGroup at Topic for all partitions",
+		[]string{"consumergroup", "topic"}, labels,
+	)
+
 	if *logSarama {
 		sarama.Logger = log.New(os.Stdout, "[sarama] ", log.LstdFlags)
 	}
