@@ -29,9 +29,10 @@ const (
 )
 
 var (
-	clusterBrokers       *prometheus.Desc
-	consumergroupLagSum  *prometheus.Desc
-	consumergroupMembers *prometheus.Desc
+	clusterBrokers                *prometheus.Desc
+	consumergroupLagSum           *prometheus.Desc
+	consumergroupMembers          *prometheus.Desc
+	consumergroupCurrentOffsetSum *prometheus.Desc
 )
 
 // Exporter collects Kafka stats from the given server and exports them using
@@ -191,6 +192,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- clusterBrokers
 	ch <- consumergroupLagSum
 	ch <- consumergroupMembers
+	ch <- consumergroupCurrentOffsetSum
 }
 
 // Collect fetches the stats from configured Kafka location and delivers them
@@ -328,6 +330,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 							}
 							e.mu.Unlock()
 						}
+						ch <- prometheus.MustNewConstMetric(
+							consumergroupCurrentOffsetSum, prometheus.GaugeValue, float64(currentOffsetSum), group.GroupId, topic,
+						)
 						ch <- prometheus.MustNewConstMetric(
 							consumergroupLagSum, prometheus.GaugeValue, float64(lagSum), group.GroupId, topic,
 						)
