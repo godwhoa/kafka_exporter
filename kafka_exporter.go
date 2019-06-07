@@ -31,6 +31,7 @@ const (
 var (
 	clusterBrokers                *prometheus.Desc
 	consumergroupLagSum           *prometheus.Desc
+	topicCurrentOffsetSum         *prometheus.Desc
 	consumergroupMembers          *prometheus.Desc
 	consumergroupCurrentOffsetSum *prometheus.Desc
 )
@@ -189,6 +190,7 @@ func NewExporter(opts kafkaOpts, topicFilter string, groupFilter string) (*Expor
 // Describe describes all the metrics ever exported by the Kafka exporter. It
 // implements prometheus.Collector.
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
+	ch <- topicCurrentOffsetSum
 	ch <- clusterBrokers
 	ch <- consumergroupLagSum
 	ch <- consumergroupMembers
@@ -234,6 +236,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			e.mu.Lock()
 			offset[topic] = make(map[int32]int64, len(partitions))
 			e.mu.Unlock()
+			var topicOffsetSum int64
 			for _, partition := range partitions {
 				currentOffset, err := e.client.GetOffset(topic, partition, sarama.OffsetNewest)
 				if err != nil {
@@ -241,8 +244,14 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				} else {
 					e.mu.Lock()
 					offset[topic][partition] = currentOffset
+					topicOffsetSum += currentOffset
 					e.mu.Unlock()
 				}
+			}
+			if topic != "__consumer_offsets" {
+				ch <- prometheus.MustNewConstMetric(
+					topicCurrentOffsetSum, prometheus.GaugeValue, float64(topicOffsetSum), topic,
+				)
 			}
 		}
 	}
@@ -408,6 +417,12 @@ func main() {
 		prometheus.BuildFQName(namespace, "", "brokers"),
 		"Number of Brokers in the Kafka Cluster.",
 		nil, labels,
+	)
+
+	topicCurrentOffsetSum = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "topic", "current_offset_sum"),
+		"Current Offset of a Broker at Topic",
+		[]string{"topic"}, labels,
 	)
 
 	consumergroupLagSum = prometheus.NewDesc(
